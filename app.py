@@ -43,7 +43,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'message': 'POS Backend is running',
-        'database': 'SQLite'
+        'database': 'PostgreSQL'
     }), 200
 
 # Import all blueprints
