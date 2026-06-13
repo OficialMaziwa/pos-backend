@@ -10,16 +10,23 @@ CORS(app)
 jwt = JWTManager(app)
 db = init_db(app)
 
-# ============ CREATE TABLES AND ADMIN USER ============
+# ============ CREATE TABLES FIRST (BEFORE ANY QUERY) ============
 with app.app_context():
     from sqlalchemy import inspect
-    inspector = inspect(db.engine)
-    print(f"Tables before: {inspector.get_table_names()}")
-    
-    db.create_all()
-    print(f"Tables after: {inspector.get_table_names()}")
-    
     from models.user import User
+    from models.product import Product
+    from models.customer import Customer
+    from models.sale import Sale, SaleItem
+    from models.stock_movement import StockMovement
+    
+    inspector = inspect(db.engine)
+    print(f"Tables before create_all: {inspector.get_table_names()}")
+    
+    # Create all tables
+    db.create_all()
+    print(f"Tables after create_all: {inspector.get_table_names()}")
+    
+    # Now create admin user (after tables exist)
     admin = User.query.filter_by(email='admin@shop.com').first()
     if not admin:
         admin = User(
@@ -31,10 +38,10 @@ with app.app_context():
         admin.set_password('admin123')
         db.session.add(admin)
         db.session.commit()
-        print("✅ Admin user created!")
+        print("✅ Admin user created successfully!")
     else:
-        print("✅ Admin user exists.")
-# =====================================================
+        print("✅ Admin user already exists.")
+# ==============================================================
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -44,8 +51,10 @@ def health_check():
         'database': 'PostgreSQL'
     }), 200
 
+# Import all blueprints
 from routes import auth, products, customers, sales, stock, reports
 
+# Register all blueprints
 app.register_blueprint(auth.bp, url_prefix='/api/auth')
 app.register_blueprint(products.bp, url_prefix='/api/products')
 app.register_blueprint(customers.bp, url_prefix='/api/customers')
@@ -54,4 +63,14 @@ app.register_blueprint(stock.bp, url_prefix='/api/stock')
 app.register_blueprint(reports.bp, url_prefix='/api/reports')
 
 if __name__ == '__main__':
+    print("=" * 50)
+    print("🚀 SMART POS BACKEND")
+    print("=" * 50)
+    print("📍 Server: http://localhost:5000")
+    print("📊 Health: http://localhost:5000/health")
+    print("🔐 Login: POST /api/auth/login")
+    print("📝 Register: POST /api/auth/register")
+    print("📋 Products: GET /api/products/")
+    print("📊 Dashboard: GET /api/reports/dashboard")
+    print("=" * 50)
     app.run(debug=True, host='0.0.0.0', port=5000)
