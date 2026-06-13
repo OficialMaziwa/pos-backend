@@ -10,6 +10,34 @@ CORS(app)
 jwt = JWTManager(app)
 db = init_db(app)
 
+# ============ CREATE TABLES AND ADMIN USER ============
+with app.app_context():
+    from sqlalchemy import inspect
+    inspector = inspect(db.engine)
+    print(f"Tables before: {inspector.get_table_names()}")
+    
+    # Create all tables
+    db.create_all()
+    print(f"Tables after: {inspector.get_table_names()}")
+    
+    # Create admin user if not exists
+    from models.user import User
+    admin = User.query.filter_by(email='admin@shop.com').first()
+    if not admin:
+        admin = User(
+            name='Admin User',
+            email='admin@shop.com',
+            phone='0712345678',
+            role='admin'
+        )
+        admin.set_password('admin123')
+        db.session.add(admin)
+        db.session.commit()
+        print("✅ Admin user created successfully!")
+    else:
+        print("✅ Admin user already exists.")
+# =====================================================
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
