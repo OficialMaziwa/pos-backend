@@ -99,11 +99,23 @@ class StockMovement(db.Model):
     note = db.Column(db.String(200))
     date = db.Column(db.DateTime, default=datetime.utcnow)
 
-# ============ CREATE TABLES ============
+# ============ CREATE TABLES WITH RESET ============
 with app.app_context():
-    db.create_all()
+    # ============ HII INAFANYA DATABASE RESET ============
+    print("=" * 50)
+    print("🔄 DATABASE RESET IN PROGRESS...")
+    print("=" * 50)
     
-    # ============ FORCE RESET ADMIN PASSWORD ============
+    # Drop all tables first
+    db.drop_all()
+    print("✅ All tables dropped successfully!")
+    
+    # Create all tables fresh
+    db.create_all()
+    print("✅ All tables created successfully!")
+    
+    # Create default admin user
+    from models.user import User
     admin = User.query.filter_by(email='malabamalaba26@gmail.com').first()
     if not admin:
         admin = User(
@@ -115,14 +127,12 @@ with app.app_context():
         admin.set_password('Malaba@03')
         db.session.add(admin)
         db.session.commit()
-        print("✅ Admin user created!")
+        print("✅ Admin user created: malabamalaba26@gmail.com / Malaba@03")
     else:
-        # Force reset password
-        admin.set_password('Malaba@03')
-        db.session.commit()
-        print("✅ Admin password reset!")
+        print("✅ Admin user already exists.")
     
-    # Add default categories if no products
+    # Add default products if none exist
+    from models.product import Product
     if Product.query.count() == 0:
         default_products = [
             {'name': 'Maziwa Tatu', 'sku': 'MAZ-001', 'category': 'Vyakula', 'stock': 50, 'cost_price': 1500, 'selling_price': 2000, 'alert_level': 10},
@@ -135,8 +145,12 @@ with app.app_context():
             product = Product(**p)
             db.session.add(product)
         db.session.commit()
-        print("✅ Default products added!")
-# ======================================
+        print(f"✅ {len(default_products)} default products added!")
+    
+    print("=" * 50)
+    print("✅ DATABASE RESET COMPLETED!")
+    print("=" * 50)
+# ================================================
 
 # ============ HEALTH CHECK ============
 @app.route('/health', methods=['GET', 'OPTIONS'])
@@ -150,7 +164,7 @@ def health_check():
     }), 200
 
 # ============ AUTH ENDPOINTS ============
-@app.route('/api/login', methods=['POST', 'OPTIONS'])
+@app.route('/api/auth/login', methods=['POST', 'OPTIONS'])
 def login():
     if request.method == 'OPTIONS':
         return '', 200
@@ -159,6 +173,7 @@ def login():
     email = data.get('email')
     password = data.get('password')
     
+    from models.user import User
     user = User.query.filter_by(email=email).first()
     
     if user and user.check_password(password):
@@ -182,6 +197,7 @@ def get_products():
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.product import Product
     products = Product.query.all()
     return jsonify([{
         'id': p.id,
@@ -200,6 +216,8 @@ def add_product():
         return '', 200
     
     data = request.get_json()
+    from models.product import Product
+    
     product = Product(
         name=data['name'],
         sku=data.get('sku', data['name'][:3].upper() + '-' + str(int(datetime.now().timestamp()))),
@@ -219,6 +237,8 @@ def update_product(product_id):
         return '', 200
     
     data = request.get_json()
+    from models.product import Product
+    
     product = Product.query.get(product_id)
     if not product:
         return jsonify({'success': False}), 404
@@ -233,6 +253,8 @@ def delete_product(product_id):
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.product import Product
+    
     product = Product.query.get(product_id)
     if product:
         db.session.delete(product)
@@ -245,6 +267,8 @@ def update_stock():
         return '', 200
     
     data = request.get_json()
+    from models.product import Product
+    
     product = Product.query.get(data['productId'])
     if not product:
         return jsonify({'success': False}), 404
@@ -261,6 +285,7 @@ def get_categories():
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.product import Product
     categories = db.session.query(Product.category).distinct().all()
     cats = [c[0] for c in categories if c[0]]
     if not cats:
@@ -278,6 +303,7 @@ def delete_category(name):
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.product import Product
     products = Product.query.filter_by(category=name).all()
     if products:
         return jsonify({'success': False, 'message': 'Category ina bidhaa'}), 400
@@ -289,6 +315,7 @@ def get_customers():
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.customer import Customer
     customers = Customer.query.all()
     return jsonify([{
         'id': c.id,
@@ -304,6 +331,8 @@ def add_customer():
         return '', 200
     
     data = request.get_json()
+    from models.customer import Customer
+    
     customer = Customer(
         name=data['name'],
         phone=data.get('phone', ''),
@@ -319,6 +348,8 @@ def delete_customer(customer_id):
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.customer import Customer
+    
     customer = Customer.query.get(customer_id)
     if customer:
         db.session.delete(customer)
@@ -330,6 +361,8 @@ def delete_customer(customer_id):
 def get_sales():
     if request.method == 'OPTIONS':
         return '', 200
+    
+    from models.sale import Sale
     
     sales = Sale.query.order_by(Sale.date.desc()).all()
     return jsonify([{
@@ -349,6 +382,8 @@ def add_sale():
         return '', 200
     
     data = request.get_json()
+    from models.sale import Sale, SaleItem
+    from models.product import Product
     
     sale = Sale(
         invoice=data['invoice'],
@@ -384,6 +419,8 @@ def get_users():
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.user import User
+    
     users = User.query.all()
     return jsonify([{
         'id': u.id,
@@ -399,6 +436,7 @@ def add_user():
         return '', 200
     
     data = request.get_json()
+    from models.user import User
     
     existing = User.query.filter_by(email=data['email']).first()
     if existing:
@@ -420,6 +458,8 @@ def delete_user(email):
     if request.method == 'OPTIONS':
         return '', 200
     
+    from models.user import User
+    
     if email == 'malabamalaba26@gmail.com':
         return jsonify({'success': False, 'message': 'Hauwezi kufuta admin!'}), 400
     
@@ -434,6 +474,9 @@ def delete_user(email):
 def get_dashboard():
     if request.method == 'OPTIONS':
         return '', 200
+    
+    from models.product import Product
+    from models.sale import Sale
     
     today = datetime.now().date()
     today_sales = Sale.query.filter(db.func.date(Sale.date) == today).all()
@@ -461,7 +504,7 @@ if __name__ == '__main__':
     print("=" * 50)
     print("📍 Server: http://localhost:5000")
     print("📊 Health: GET /health")
-    print("🔐 Login: POST /api/login")
+    print("🔐 Login: POST /api/auth/login")
     print("📋 Products: GET /api/products")
     print("=" * 50)
     print("✅ Admin Email: malabamalaba26@gmail.com")
