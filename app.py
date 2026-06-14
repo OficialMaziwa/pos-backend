@@ -1,54 +1,109 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from config import Config
-from utils.database import init_db
-import sqlite3
-from datetime import datetime
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timedelta
+import os
 
 app = Flask(__name__)
-app.config.from_object(Config)
 
-# ============ CORS CONFIGURATION - HII INASULUHISHA TATIZO LA CORS ============
+# ============ CONFIGURATION ============
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///pos.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'super-secret-key-change-this')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)
+
+# ============ CORS CONFIGURATION ============
 CORS(app, 
      origins=['*'],
      allow_headers=['Content-Type', 'Authorization', 'Accept'],
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
      supports_credentials=True)
 
-# Middleware ya kushughulikia CORS kwa manually
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    
     if request.method == 'OPTIONS':
         response.status_code = 200
-    
     return response
-# =============================================================================
 
+# ============ INITIALIZE DATABASE ============
+db = SQLAlchemy(app)
 jwt = JWTManager(app)
-db = init_db(app)
+
+# ============ MODELS ============
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(100), unique=True, nullable=False)
+    phone = db.Column(db.String(20), default='')
+    role = db.Column(db.String(20), default='cashier')
+    password_hash = db.Column(db.String(200), nullable=False)
+    
+    def set_password(self, password):
+        import bcrypt
+        self.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    
+    def check_password(self, password):
+        import bcrypt
+        return bcrypt.checkpw(password.encode(), self.password_hash.encode())
+
+class Product(db.Model):
+    __tablename__ = 'products'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    sku = db.Column(db.String(50), unique=True)
+    category = db.Column(db.String(50))
+    stock = db.Column(db.Integer, default=0)
+    cost_price = db.Column(db.Float, default=0)
+    selling_price = db.Column(db.Float, nullable=False)
+    alert_level = db.Column(db.Integer, default=10)
+
+class Customer(db.Model):
+    __tablename__ = 'customers'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20))
+    email = db.Column(db.String(100))
+    address = db.Column(db.String(200))
+
+class Sale(db.Model):
+    __tablename__ = 'sales'
+    id = db.Column(db.Integer, primary_key=True)
+    invoice = db.Column(db.String(50), unique=True, nullable=False)
+    customer_name = db.Column(db.String(100), default='Mteja wa Kawaida')
+    customer_phone = db.Column(db.String(20), default='')
+    total = db.Column(db.Float, default=0)
+    profit = db.Column(db.Float, default=0)
+    payment_method = db.Column(db.String(20), default='cash')
+    date = db.Column(db.DateTime, default=datetime.utcnow)
+
+class SaleItem(db.Model):
+    __tablename__ = 'sale_items'
+    id = db.Column(db.Integer, primary_key=True)
+    sale_id = db.Column(db.Integer, db.ForeignKey('sales.id'))
+    product_name = db.Column(db.String(100))
+    quantity = db.Column(db.Integer, default=0)
+    price = db.Column(db.Float, default=0)
+    total = db.Column(db.Float, default=0)
+
+class StockMovement(db.Model):
+    __tablename__ = 'stock_movements'
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'))
+    quantity = db.Column(db.Integer)
+    type = db.Column(db.String(20))
+    note = db.Column(db.String(200))
+    date = db.Column(db.DateTime, default=datetime.utcnow)
 
 # ============ CREATE TABLES ============
 with app.app_context():
-    from sqlalchemy import inspect
-    from models.user import User
-    from models.product import Product
-    from models.customer import Customer
-    from models.sale import Sale, SaleItem
-    from models.stock_movement import StockMovement
-    
-    inspector = inspect(db.engine)
-    print(f"Tables before create_all: {inspector.get_table_names()}")
-    
     db.create_all()
-    print(f"Tables after create_all: {inspector.get_table_names()}")
     
-    # Create default admin user
+    # ============ FORCE RESET ADMIN PASSWORD ============
     admin = User.query.filter_by(email='malabamalaba26@gmail.com').first()
     if not admin:
         admin = User(
@@ -60,11 +115,30 @@ with app.app_context():
         admin.set_password('Malaba@03')
         db.session.add(admin)
         db.session.commit()
-        print("✅ Admin user created successfully!")
+        print("✅ Admin user created!")
     else:
-        print("✅ Admin user already exists.")
-# ========================================
+        # Force reset password
+        admin.set_password('Malaba@03')
+        db.session.commit()
+        print("✅ Admin password reset!")
+    
+    # Add default categories if no products
+    if Product.query.count() == 0:
+        default_products = [
+            {'name': 'Maziwa Tatu', 'sku': 'MAZ-001', 'category': 'Vyakula', 'stock': 50, 'cost_price': 1500, 'selling_price': 2000, 'alert_level': 10},
+            {'name': 'Sukari 1kg', 'sku': 'SUK-001', 'category': 'Vyakula', 'stock': 30, 'cost_price': 2000, 'selling_price': 2800, 'alert_level': 5},
+            {'name': 'Unga 1kg', 'sku': 'UNG-001', 'category': 'Vyakula', 'stock': 40, 'cost_price': 1800, 'selling_price': 2500, 'alert_level': 8},
+            {'name': 'Paracetamol', 'sku': 'PAR-001', 'category': 'Dawa', 'stock': 100, 'cost_price': 500, 'selling_price': 1000, 'alert_level': 20},
+            {'name': 'T-Shirt', 'sku': 'TSH-001', 'category': 'Nguo', 'stock': 20, 'cost_price': 5000, 'selling_price': 10000, 'alert_level': 5},
+        ]
+        for p in default_products:
+            product = Product(**p)
+            db.session.add(product)
+        db.session.commit()
+        print("✅ Default products added!")
+# ======================================
 
+# ============ HEALTH CHECK ============
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health_check():
     if request.method == 'OPTIONS':
@@ -75,7 +149,7 @@ def health_check():
         'database': 'PostgreSQL/SQLite'
     }), 200
 
-# ============ AUTH ENDPOINTS (Direct without blueprint) ============
+# ============ AUTH ENDPOINTS ============
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
     if request.method == 'OPTIONS':
@@ -85,7 +159,6 @@ def login():
     email = data.get('email')
     password = data.get('password')
     
-    from models.user import User
     user = User.query.filter_by(email=email).first()
     
     if user and user.check_password(password):
@@ -103,38 +176,12 @@ def login():
     
     return jsonify({'success': False, 'message': 'Email au password si sahihi'}), 401
 
-@app.route('/api/auth/register', methods=['POST', 'OPTIONS'])
-def register():
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    data = request.get_json()
-    from models.user import User
-    
-    existing = User.query.filter_by(email=data['email']).first()
-    if existing:
-        return jsonify({'success': False, 'message': 'Email tayari ipo'}), 400
-    
-    user = User(
-        name=data['name'],
-        email=data['email'],
-        phone=data.get('phone', ''),
-        role=data.get('role', 'cashier')
-    )
-    user.set_password(data['password'])
-    
-    db.session.add(user)
-    db.session.commit()
-    
-    return jsonify({'success': True, 'message': 'User created successfully'}), 201
-
 # ============ PRODUCTS ENDPOINTS ============
 @app.route('/api/products', methods=['GET', 'OPTIONS'])
 def get_products():
     if request.method == 'OPTIONS':
         return '', 200
     
-    from models.product import Product
     products = Product.query.all()
     return jsonify([{
         'id': p.id,
@@ -153,8 +200,6 @@ def add_product():
         return '', 200
     
     data = request.get_json()
-    from models.product import Product
-    
     product = Product(
         name=data['name'],
         sku=data.get('sku', data['name'][:3].upper() + '-' + str(int(datetime.now().timestamp()))),
@@ -164,10 +209,8 @@ def add_product():
         selling_price=data['sellingPrice'],
         alert_level=data.get('alertLevel', 10)
     )
-    
     db.session.add(product)
     db.session.commit()
-    
     return jsonify({'success': True, 'id': product.id}), 201
 
 @app.route('/api/products/<int:product_id>', methods=['PUT', 'OPTIONS'])
@@ -176,15 +219,12 @@ def update_product(product_id):
         return '', 200
     
     data = request.get_json()
-    from models.product import Product
-    
     product = Product.query.get(product_id)
     if not product:
-        return jsonify({'success': False, 'message': 'Product not found'}), 404
+        return jsonify({'success': False}), 404
     
     if 'sellingPrice' in data:
         product.selling_price = data['sellingPrice']
-    
     db.session.commit()
     return jsonify({'success': True}), 200
 
@@ -193,13 +233,10 @@ def delete_product(product_id):
     if request.method == 'OPTIONS':
         return '', 200
     
-    from models.product import Product
-    
     product = Product.query.get(product_id)
     if product:
         db.session.delete(product)
         db.session.commit()
-    
     return jsonify({'success': True}), 200
 
 @app.route('/api/products/stock', methods=['POST', 'OPTIONS'])
@@ -208,28 +245,14 @@ def update_stock():
         return '', 200
     
     data = request.get_json()
-    from models.product import Product
-    from models.stock_movement import StockMovement
-    
     product = Product.query.get(data['productId'])
     if not product:
-        return jsonify({'success': False, 'message': 'Product not found'}), 404
+        return jsonify({'success': False}), 404
     
     product.stock += data['quantity']
-    
     if data.get('newPrice') and data['newPrice'] > 0:
         product.selling_price = data['newPrice']
-    
-    # Record stock movement
-    movement = StockMovement(
-        product_id=product.id,
-        quantity=data['quantity'],
-        type='add',
-        note='Stock added from POS'
-    )
-    db.session.add(movement)
     db.session.commit()
-    
     return jsonify({'success': True}), 200
 
 # ============ CATEGORIES ENDPOINTS ============
@@ -238,23 +261,16 @@ def get_categories():
     if request.method == 'OPTIONS':
         return '', 200
     
-    from models.product import Product
     categories = db.session.query(Product.category).distinct().all()
     cats = [c[0] for c in categories if c[0]]
-    
-    # Default categories if none exist
     if not cats:
         cats = ['Vyakula', 'Dawa', 'Nguo', 'Vifaa', 'Vinywaji', 'Vipodozi', 'Electronics']
-    
     return jsonify(cats), 200
 
 @app.route('/api/categories', methods=['POST', 'OPTIONS'])
 def add_category():
     if request.method == 'OPTIONS':
         return '', 200
-    
-    data = request.get_json()
-    # Categories are just strings, no separate table needed
     return jsonify({'success': True}), 201
 
 @app.route('/api/categories/<string:name>', methods=['DELETE', 'OPTIONS'])
@@ -262,12 +278,9 @@ def delete_category(name):
     if request.method == 'OPTIONS':
         return '', 200
     
-    # Check if any product uses this category
-    from models.product import Product
     products = Product.query.filter_by(category=name).all()
     if products:
-        return jsonify({'success': False, 'message': 'Category ina bidhaa, futa bidhaa kwanza'}), 400
-    
+        return jsonify({'success': False, 'message': 'Category ina bidhaa'}), 400
     return jsonify({'success': True}), 200
 
 # ============ CUSTOMERS ENDPOINTS ============
@@ -276,7 +289,6 @@ def get_customers():
     if request.method == 'OPTIONS':
         return '', 200
     
-    from models.customer import Customer
     customers = Customer.query.all()
     return jsonify([{
         'id': c.id,
@@ -292,18 +304,14 @@ def add_customer():
         return '', 200
     
     data = request.get_json()
-    from models.customer import Customer
-    
     customer = Customer(
         name=data['name'],
         phone=data.get('phone', ''),
         email=data.get('email', ''),
         address=data.get('address', '')
     )
-    
     db.session.add(customer)
     db.session.commit()
-    
     return jsonify({'success': True}), 201
 
 @app.route('/api/customers/<int:customer_id>', methods=['DELETE', 'OPTIONS'])
@@ -311,13 +319,10 @@ def delete_customer(customer_id):
     if request.method == 'OPTIONS':
         return '', 200
     
-    from models.customer import Customer
-    
     customer = Customer.query.get(customer_id)
     if customer:
         db.session.delete(customer)
         db.session.commit()
-    
     return jsonify({'success': True}), 200
 
 # ============ SALES ENDPOINTS ============
@@ -325,8 +330,6 @@ def delete_customer(customer_id):
 def get_sales():
     if request.method == 'OPTIONS':
         return '', 200
-    
-    from models.sale import Sale
     
     sales = Sale.query.order_by(Sale.date.desc()).all()
     return jsonify([{
@@ -346,10 +349,7 @@ def add_sale():
         return '', 200
     
     data = request.get_json()
-    from models.sale import Sale, SaleItem
-    from models.product import Product
     
-    # Create sale
     sale = Sale(
         invoice=data['invoice'],
         customer_name=data.get('customerName', 'Mteja wa Kawaida'),
@@ -358,11 +358,9 @@ def add_sale():
         profit=data['profit'],
         payment_method=data['payment']
     )
-    
     db.session.add(sale)
     db.session.flush()
     
-    # Add sale items
     for item in data['items']:
         sale_item = SaleItem(
             sale_id=sale.id,
@@ -373,13 +371,11 @@ def add_sale():
         )
         db.session.add(sale_item)
         
-        # Update product stock
         product = Product.query.filter_by(name=item['productName']).first()
         if product:
             product.stock -= item['quantity']
     
     db.session.commit()
-    
     return jsonify({'success': True, 'id': sale.id}), 201
 
 # ============ USERS ENDPOINTS ============
@@ -387,8 +383,6 @@ def add_sale():
 def get_users():
     if request.method == 'OPTIONS':
         return '', 200
-    
-    from models.user import User
     
     users = User.query.all()
     return jsonify([{
@@ -405,7 +399,6 @@ def add_user():
         return '', 200
     
     data = request.get_json()
-    from models.user import User
     
     existing = User.query.filter_by(email=data['email']).first()
     if existing:
@@ -418,10 +411,8 @@ def add_user():
         role=data.get('role', 'cashier')
     )
     user.set_password(data['password'])
-    
     db.session.add(user)
     db.session.commit()
-    
     return jsonify({'success': True}), 201
 
 @app.route('/api/users/<string:email>', methods=['DELETE', 'OPTIONS'])
@@ -429,16 +420,13 @@ def delete_user(email):
     if request.method == 'OPTIONS':
         return '', 200
     
-    from models.user import User
-    
     if email == 'malabamalaba26@gmail.com':
-        return jsonify({'success': False, 'message': 'Hauwezi kufuta admin mkuu!'}), 400
+        return jsonify({'success': False, 'message': 'Hauwezi kufuta admin!'}), 400
     
     user = User.query.filter_by(email=email).first()
     if user:
         db.session.delete(user)
         db.session.commit()
-    
     return jsonify({'success': True}), 200
 
 # ============ DASHBOARD ENDPOINTS ============
@@ -447,23 +435,16 @@ def get_dashboard():
     if request.method == 'OPTIONS':
         return '', 200
     
-    from models.product import Product
-    from models.sale import Sale
-    
     today = datetime.now().date()
-    
-    # Today's sales
     today_sales = Sale.query.filter(db.func.date(Sale.date) == today).all()
+    
     today_revenue = sum(s.total for s in today_sales)
     today_profit = sum(s.profit for s in today_sales)
     
-    # Stock value
     products = Product.query.all()
     stock_value = sum(p.stock * p.selling_price for p in products)
     total_cost = sum(p.stock * p.cost_price for p in products)
     expected_profit = stock_value - total_cost
-    
-    # Low stock count
     low_stock_count = sum(1 for p in products if p.stock <= p.alert_level)
     
     return jsonify({
@@ -474,31 +455,16 @@ def get_dashboard():
         'lowStockCount': low_stock_count
     }), 200
 
-# ============ IMPORT BLUEPRINTS (Optional - for additional routes) ============
-try:
-    from routes import auth, products, customers, sales, stock, reports
-    
-    app.register_blueprint(auth.bp, url_prefix='/api/auth')
-    app.register_blueprint(products.bp, url_prefix='/api/products')
-    app.register_blueprint(customers.bp, url_prefix='/api/customers')
-    app.register_blueprint(sales.bp, url_prefix='/api/sales')
-    app.register_blueprint(stock.bp, url_prefix='/api/stock')
-    app.register_blueprint(reports.bp, url_prefix='/api/reports')
-    print("✅ Blueprints registered successfully")
-except Exception as e:
-    print(f"⚠️ Blueprints not found or error: {e}")
-
 if __name__ == '__main__':
     print("=" * 50)
-    print("🚀 SMART POS BACKEND - FIXED VERSION")
+    print("🚀 SMART POS BACKEND - READY")
     print("=" * 50)
     print("📍 Server: http://localhost:5000")
-    print("📊 Health: http://localhost:5000/health")
+    print("📊 Health: GET /health")
     print("🔐 Login: POST /api/login")
-    print("📝 Register: POST /api/auth/register")
     print("📋 Products: GET /api/products")
-    print("📊 Dashboard: GET /api/dashboard")
     print("=" * 50)
-    print("✅ CORS enabled - Frontend can connect from any domain")
+    print("✅ Admin Email: malabamalaba26@gmail.com")
+    print("✅ Admin Password: Malaba@03")
     print("=" * 50)
     app.run(debug=True, host='0.0.0.0', port=5000)
